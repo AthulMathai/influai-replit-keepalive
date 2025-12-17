@@ -2,7 +2,6 @@ name: Ping Replit API
 
 on:
   schedule:
-    # every 10 minutes
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
@@ -10,14 +9,27 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Curl health endpoint
+      - name: Ping health endpoint (retry + tolerate cold start)
         run: |
-          set -e
+          set +e
           URL="${{ secrets.REPLIT_HEALTH_URL }}"
           echo "Pinging: $URL"
-          code=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
-          echo "HTTP $code"
-          if [ "$code" -lt 200 ] || [ "$code" -ge 400 ]; then
-            echo "Health check failed"
-            exit 1
-          fi
+
+          # Replit cold starts can briefly return 502/503/504.
+          # We'll retry for ~1 minute total.
+          for i in 1 2 3 4 5 6; do
+            echo "Attempt $i..."
+            code=$(curl -sS -L --max-time 20 -o /dev/null -w "%{http_code}" "$URL")
+            echo "HTTP $code"
+
+            if [ "$code" = "200" ]; then
+              echo "Health check OK"
+              exit 0
+            fi
+
+            # Wait before next try
+            sleep 10
+          done
+
+          echo "Health check failed after retries"
+          exit 1
